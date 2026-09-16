@@ -52,7 +52,7 @@
 ### 1. เข้าสู่โฟลเดอร์โปรเจกต์
 เปิด Terminal แล้วเข้าไปที่โฟลเดอร์:
 ```bash
-cd /Users/paitoonarayasatjapong/llm/deepseek/Deepseek-API-Node
+cd Deepseek-API-Node
 ```
 
 ### 2. ติดตั้ง Dependencies
