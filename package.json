@@ -1,0 +1,30 @@
+{
+  "name": "deepseek-api-node",
+  "version": "1.0.0",
+  "description": "Unofficial OpenAI-compatible DeepSeek API bridge in Node.js with WebAssembly PoW solver, Playwright authentication, and Tool Calling emulation",
+  "main": "app.js",
+  "type": "module",
+  "scripts": {
+    "start": "node app.js",
+    "login": "node cli.js login",
+    "logout": "node cli.js logout",
+    "switch": "node cli.js switch",
+    "test": "node --test test/*.test.js"
+  },
+  "keywords": [
+    "deepseek",
+    "llm",
+    "openai-compatible",
+    "tool-calling",
+    "webassembly",
+    "playwright"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "playwright": "^1.50.1"
+  }
+}
