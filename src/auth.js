@@ -178,8 +178,11 @@ async function launchBrowserContext(profileDir, headless) {
  */
 export async function login({
   profileDir = DEFAULT_PROFILE_DIR,
+  sessionFile = DEFAULT_SESSION_FILE,
   headless = false,
   assumeLoggedOut = false,
+  email = null,
+  password = null,
 } = {}) {
   const context = await launchBrowserContext(profileDir, headless);
   const page = context.pages().length > 0 ? context.pages()[0] : await context.newPage();
@@ -192,7 +195,27 @@ export async function login({
 
   if (!existing) {
     await safeGoto(page, SIGNIN_URL);
-    console.log('[auth] Please sign in in the window (solve the human-check if shown). Waiting for session...');
+
+    // If email and password provided, automatically fill them and click submit
+    if (email && password) {
+      try {
+        console.log(`[auth] Auto-filling credentials for: ${email}...`);
+        await page.waitForSelector('input', { timeout: 15000 });
+        const emailInput = page.getByRole('textbox', { name: 'Phone number / email address' });
+        const pwdInput = page.getByRole('textbox', { name: 'Password' });
+        await emailInput.fill(email);
+        await pwdInput.fill(password);
+        await page.waitForTimeout(500);
+        const loginBtn = page.getByRole('button', { name: 'Log in', exact: true });
+        await loginBtn.click();
+        console.log('[auth] Submitted login form! Please solve the captcha/slider in the browser window if shown...');
+      } catch (fillErr) {
+        console.log('[auth] Could not auto-fill form elements, please sign in manually in the window:', fillErr.message);
+      }
+    } else {
+      console.log('[auth] Please sign in in the window (solve the human-check if shown). Waiting for session...');
+    }
+
     const token = await waitForToken(page, 300000);
     if (!token) {
       await context.close();
@@ -205,14 +228,14 @@ export async function login({
   if (!session) {
     throw new Error('Logged in but could not read userToken from localStorage.');
   }
-  session.save();
+  session.save(sessionFile);
   return session;
 }
 
 /**
  * Try to capture token headlessly from persistent profile.
  */
-export async function headlessRefresh(profileDir = DEFAULT_PROFILE_DIR) {
+export async function headlessRefresh(profileDir = DEFAULT_PROFILE_DIR, sessionFile = DEFAULT_SESSION_FILE) {
   let context;
   try {
     context = await launchBrowserContext(profileDir, true);
@@ -231,7 +254,7 @@ export async function headlessRefresh(profileDir = DEFAULT_PROFILE_DIR) {
   }
 
   if (session) {
-    session.save();
+    session.save(sessionFile);
   }
   return session;
 }
@@ -250,7 +273,7 @@ export async function getSession({
     return cached;
   }
 
-  const refreshed = await headlessRefresh(profileDir);
+  const refreshed = await headlessRefresh(profileDir, sessionFile);
   if (refreshed) {
     return refreshed;
   }
@@ -260,7 +283,7 @@ export async function getSession({
   }
 
   console.log('[auth] No valid session found — opening browser window to log in...');
-  return login({ profileDir, assumeLoggedOut: true });
+  return login({ profileDir, sessionFile, assumeLoggedOut: true });
 }
 
 // Direct invocation (e.g. node src/auth.js)

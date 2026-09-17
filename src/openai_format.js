@@ -70,12 +70,11 @@ export function completionResponse({
     message.tool_calls = toolCalls;
   }
 
-  return {
+  const res = {
     id: generateId(),
     object: 'chat.completion',
     created: nowSeconds(),
     model,
-    conversation_id: conversationId,
     choices: [
       {
         index: 0,
@@ -89,6 +88,12 @@ export function completionResponse({
       total_tokens: pt + ct,
     },
   };
+
+  if (conversationId) {
+    res.conversation_id = conversationId;
+  }
+
+  return res;
 }
 
 /**
@@ -125,7 +130,6 @@ export async function* streamChunks(model, stream) {
     }
   }
 
-  const conversationId = stream.conversationId || (stream.getConversationId ? stream.getConversationId() : null);
-  yield frame({}, 'stop', { conversation_id: conversationId });
+  yield frame({}, 'stop');
   yield 'data: [DONE]\n\n';
 }

@@ -9,21 +9,29 @@ export const DEFAULT_MODEL_TYPE = 'default';
 
 const CID_SEP = ':';
 
-export function encodeCid(sessionId, messageId) {
-  if (messageId == null) {
-    return sessionId;
+export function encodeCid(sessionId, messageId, accountName = null) {
+  const base = messageId == null ? sessionId : `${sessionId}${CID_SEP}${messageId}`;
+  if (accountName) {
+    return `${accountName}@${base}`;
   }
-  return `${sessionId}${CID_SEP}${messageId}`;
+  return base;
 }
 
 export function decodeCid(conversationId) {
   if (!conversationId) {
-    return [null, null];
+    return [null, null, null];
   }
-  const parts = conversationId.split(CID_SEP);
+  let target = conversationId;
+  let accountName = null;
+  if (target.includes('@')) {
+    const atIdx = target.indexOf('@');
+    accountName = target.slice(0, atIdx) || null;
+    target = target.slice(atIdx + 1);
+  }
+  const parts = target.split(CID_SEP);
   const sessionId = parts[0] || null;
   const parentId = parts[1] && /^\d+$/.test(parts[1]) ? parseInt(parts[1], 10) : null;
-  return [sessionId, parentId];
+  return [sessionId, parentId, accountName];
 }
 
 function unwrapBizData(json) {
@@ -42,16 +50,26 @@ export class DeepSeekClient {
    * @param {object} [options]
    * @param {import('./auth.js').Session} [options.session]
    * @param {boolean} [options.allowInteractive=true]
+   * @param {string} [options.accountName=null]
+   * @param {string} [options.profileDir=null]
+   * @param {string} [options.sessionFile=null]
    */
-  constructor({ session = null, allowInteractive = true } = {}) {
+  constructor({ session = null, allowInteractive = true, accountName = null, profileDir = null, sessionFile = null } = {}) {
     this.session = session;
     this.allowInteractive = allowInteractive;
+    this.accountName = accountName;
+    this.profileDir = profileDir;
+    this.sessionFile = sessionFile;
     this.pow = new DeepSeekPow();
   }
 
   async ensureSession() {
     if (!this.session) {
-      this.session = await getSession({ allowInteractive: this.allowInteractive });
+      this.session = await getSession({
+        allowInteractive: this.allowInteractive,
+        profileDir: this.profileDir,
+        sessionFile: this.sessionFile,
+      });
     }
     return this.session;
   }
@@ -114,6 +132,24 @@ export class DeepSeekClient {
   }
 
   /**
+   * Delete a chat session on DeepSeek web backend.
+   * @param {string} sessionId
+   */
+  async deleteChatSession(sessionId) {
+    if (!sessionId) return;
+    try {
+      await this.ensureSession();
+      await fetch(`${BASE}/api/v0/chat_session/delete`, {
+        method: 'POST',
+        headers: this._baseHeaders(),
+        body: JSON.stringify({ chat_session_id: sessionId }),
+      });
+    } catch {
+      // ignore deletion errors
+    }
+  }
+
+  /**
    * Streams completion reply chunks as an async generator.
    *
    * @param {string} prompt
@@ -122,9 +158,19 @@ export class DeepSeekClient {
    * @param {string} [options.model]
    * @param {boolean} [options.thinking=false]
    * @param {boolean} [options.search=false]
+   * @param {boolean} [options.stateless=true]
    * @returns {AsyncGenerator<string, void, unknown> & { conversationId?: string }}
    */
-  stream(prompt, { conversationId = null, model = null, thinking = DEFAULT_THINKING, search = DEFAULT_SEARCH } = {}) {
+  stream(
+    prompt,
+    {
+      conversationId = null,
+      model = null,
+      thinking = DEFAULT_THINKING,
+      search = DEFAULT_SEARCH,
+      stateless = true,
+    } = {}
+  ) {
     if (conversationId && model !== null) {
       throw new Error(
         '`model` cannot be set together with `conversation_id`; a thread\'s ' +
@@ -167,31 +213,39 @@ export class DeepSeekClient {
         'x-ds-pow-response': powHeader,
       };
 
-      const res = await fetch(`${BASE}${COMPLETION_PATH}`, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(body),
-      });
+      try {
+        const res = await fetch(`${BASE}${COMPLETION_PATH}`, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify(body),
+        });
 
-      if (!res.ok) {
-        const errText = await res.text();
-        throw new Error(`HTTP ${res.status} on completion: ${errText}`);
-      }
-
-      const meta = {};
-      if (res.body) {
-        for await (const delta of parseSseStream(res.body, meta)) {
-          yield delta;
+        if (!res.ok) {
+          const errText = await res.text();
+          throw new Error(`HTTP ${res.status} on completion: ${errText}`);
         }
-      }
 
-      if (meta.message_id != null) {
-        streamMeta.message_id = meta.message_id;
-        streamMeta.conversation_id = encodeCid(sessionId, meta.message_id);
-        asyncGen.conversationId = streamMeta.conversation_id;
-      } else {
-        streamMeta.conversation_id = sessionId;
-        asyncGen.conversationId = sessionId;
+        const meta = {};
+        if (res.body) {
+          for await (const delta of parseSseStream(res.body, meta)) {
+            yield delta;
+          }
+        }
+
+        if (meta.message_id != null) {
+          streamMeta.message_id = meta.message_id;
+          streamMeta.conversation_id = encodeCid(sessionId, meta.message_id, client.accountName);
+          asyncGen.conversationId = streamMeta.conversation_id;
+        } else {
+          const fullCid = encodeCid(sessionId, null, client.accountName);
+          streamMeta.conversation_id = fullCid;
+          asyncGen.conversationId = fullCid;
+        }
+      } finally {
+        if (stateless && sessionId) {
+          // Delete temporary session from DeepSeek backend to avoid caching / clutter
+          client.deleteChatSession(sessionId).catch(() => {});
+        }
       }
     })();
 

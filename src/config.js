@@ -1,5 +1,5 @@
 import dotenv from 'dotenv';
-dotenv.config();
+dotenv.config({ override: true });
 
 export const RATE_LIMIT_PER_MINUTE = parseInt(process.env.RATE_LIMIT_PER_MINUTE || '30', 10);
 
@@ -19,6 +19,14 @@ export const DEFAULT_THINKING = ['1', 'true', 'yes', 'on'].includes(
 
 export const DEFAULT_SEARCH = ['1', 'true', 'yes', 'on'].includes(
   (process.env.DEFAULT_SEARCH || 'false').toLowerCase()
+);
+
+export const ENABLE_LOGGING = ['1', 'true', 'yes', 'on'].includes(
+  (process.env.ENABLE_LOGGING || 'false').toLowerCase()
+);
+
+export const ENABLE_COUNTER_LOG = ['1', 'true', 'yes', 'on'].includes(
+  (process.env.ENABLE_COUNTER_LOG || 'true').toLowerCase()
 );
 
 export const HOST = process.env.HOST || '127.0.0.1';

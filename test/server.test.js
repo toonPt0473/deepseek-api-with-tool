@@ -17,6 +17,23 @@ test('Server: /healthz returns ok', async () => {
   }
 });
 
+test('Server: /stats returns server metrics', async () => {
+  const app = createServer({ client: {} });
+  const server = app.listen(0);
+  const port = server.address().port;
+
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/stats`);
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    assert.ok(typeof body.total_requests === 'number');
+    assert.ok(typeof body.uptime_seconds === 'number');
+    assert.ok(body.total_requests >= 1);
+  } finally {
+    server.close();
+  }
+});
+
 test('Server: /v1/models returns model list', async () => {
   const app = createServer({ client: {} });
   const server = app.listen(0);

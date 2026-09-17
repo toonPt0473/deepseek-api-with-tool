@@ -1,38 +1,144 @@
 #!/usr/bin/env node
-import { login, getSession, Session } from './src/auth.js';
 import { DeepSeekClient } from './src/client.js';
+import { AccountManager } from './src/accounts.js';
+import { headlessRefresh } from './src/auth.js';
 
-const command = process.argv[2] || 'status';
+const command = process.argv[2] || 'account:list';
 
 async function main() {
   switch (command) {
-    case 'login': {
-      console.log('[cli] Launching browser for DeepSeek interactive login...');
-      const session = await login({ headless: false, assumeLoggedOut: true });
-      console.log(`[cli] Successfully logged in! Token: ${session.token.slice(0, 12)}...`);
-      console.log(`[cli] Saved ${Object.keys(session.cookies).length} cookies.`);
-      break;
-    }
-    case 'status': {
-      const session = Session.load();
-      if (!session) {
-        console.log('[cli] No saved session found.');
-        console.log('[cli] Run "node cli.js login" to log in with your DeepSeek account.');
+    case 'accounts':
+    case 'account:list':
+    case 'list': {
+      const pool = AccountManager.loadPool();
+      const accounts = pool.list();
+
+      if (accounts.length === 0) {
+        console.log('[cli] No accounts found in pool.');
+        console.log('[cli] Run "node cli.js account:add <name>" to register your first account.');
         return;
       }
-      const ageMinutes = Math.floor(session.age / 60);
-      console.log(`[cli] Saved session found:`);
-      console.log(`  - Token: ${session.token.slice(0, 12)}...`);
-      console.log(`  - Cookies: ${Object.keys(session.cookies).length}`);
-      console.log(`  - Age: ${ageMinutes} minutes`);
-      console.log(`  - Status: ${session.age < 6 * 3600 ? 'Fresh (ready to use)' : 'Expired (will auto-refresh)'}`);
+
+      console.log(`[cli] Registered DeepSeek Accounts (${accounts.length}):`);
+      for (const acc of accounts) {
+        const s = acc.getSession();
+        const ageMin = s ? Math.floor(s.age / 60) : 'N/A';
+        const status = !acc.isAvailable
+          ? `🟡 In Cooldown (${acc.cooldownRemainingSec}s remaining)`
+          : s
+          ? '🟢 Active'
+          : '🔴 Missing Session';
+
+        console.log(`\n  • Account: "${acc.name}"`);
+        console.log(`    - Status:   ${status}`);
+        console.log(`    - Token:    ${s?.token ? s.token.slice(0, 12) + '...' : 'None'}`);
+        console.log(`    - Age:      ${ageMin} minutes`);
+        console.log(`    - Session:  ${acc.sessionFile}`);
+        console.log(`    - Profile:  ${acc.profileDir}`);
+      }
+      console.log('');
       break;
     }
+
+    case 'account:add':
+    case 'add': {
+      const name = process.argv[3];
+      const email = process.argv[4] || null;
+      const password = process.argv[5] || null;
+
+      if (!name) {
+        console.error('[cli] Error: Missing account name.');
+        console.error('Usage:');
+        console.error('  node cli.js account:add <name>                     (Log in manually in browser window)');
+        console.error('  node cli.js account:add <name> <email> <password>  (Auto-fill login credentials)');
+        process.exit(1);
+      }
+
+      console.log(`[cli] Launching browser to log in account "${name}"...`);
+      const result = await AccountManager.addAccount(name, {
+        headless: false,
+        email,
+        password,
+      });
+
+      console.log(`[cli] Successfully added account "${name}"!`);
+      console.log(`[cli] Token: ${result.session.token.slice(0, 12)}...`);
+      console.log(`[cli] Saved to: ${result.sessionFile}`);
+      break;
+    }
+
+    case 'account:refresh':
+    case 'refresh': {
+      const name = process.argv[3];
+      const pool = AccountManager.loadPool();
+
+      const targets = name ? [pool.get(name)].filter(Boolean) : pool.list();
+      if (targets.length === 0) {
+        console.error(`[cli] Account "${name || 'any'}" not found in pool.`);
+        process.exit(1);
+      }
+
+      for (const acc of targets) {
+        console.log(`[cli] Refreshing session for account "${acc.name}" headlessly...`);
+        const s = await headlessRefresh(acc.profileDir, acc.sessionFile);
+        if (s) {
+          console.log(`[cli] ✅ Successfully refreshed "${acc.name}"! New token: ${s.token.slice(0, 12)}...`);
+        } else {
+          console.log(`[cli] ⚠️ Could not refresh "${acc.name}" headlessly. Run "node cli.js account:add ${acc.name}" to re-login.`);
+        }
+      }
+      break;
+    }
+
+    case 'account:remove':
+    case 'remove': {
+      const name = process.argv[3];
+      if (!name) {
+        console.error('[cli] Error: Missing account name to remove.');
+        console.error('Usage: node cli.js account:remove <account_name>');
+        process.exit(1);
+      }
+
+      const ok = AccountManager.removeAccount(name);
+      if (ok) {
+        console.log(`[cli] Account "${name}" removed successfully.`);
+      } else {
+        console.log(`[cli] Account "${name}" not found in pool.`);
+      }
+      break;
+    }
+
+    case 'account:test': {
+      const name = process.argv[3];
+      if (!name) {
+        console.error('[cli] Error: Missing account name to test.');
+        console.error('Usage: node cli.js account:test <account_name> [prompt]');
+        process.exit(1);
+      }
+
+      const pool = AccountManager.loadPool();
+      const acc = pool.get(name);
+      if (!acc) {
+        console.error(`[cli] Account "${name}" not found in pool.`);
+        process.exit(1);
+      }
+
+      const prompt = process.argv.slice(4).join(' ') || 'Hello! Tell me a short joke.';
+      console.log(`[cli] Testing account "${name}" with prompt: "${prompt}"...`);
+      const reply = await acc.client.chat(prompt);
+      console.log('\n--- DeepSeek Response ---');
+      console.log(reply.text);
+      console.log('-------------------------');
+      console.log('Conversation ID:', reply.conversation_id);
+      break;
+    }
+
     case 'chat': {
       const prompt = process.argv.slice(3).join(' ') || 'Hello! Tell me a short joke.';
       console.log(`[cli] Prompt: "${prompt}"`);
-      const client = new DeepSeekClient();
-      console.log('[cli] Sending request to DeepSeek...');
+      const pool = AccountManager.loadPool();
+      const { client, account } = pool.selectClient();
+      console.log(`[cli] Sending request via account "${account.name}"...`);
       const reply = await client.chat(prompt);
       console.log('\n--- DeepSeek Response ---');
       console.log(reply.text);
@@ -40,40 +146,18 @@ async function main() {
       console.log('Conversation ID:', reply.conversation_id);
       break;
     }
-    case 'logout': {
-      import('node:fs').then(({ default: fs }) => {
-        import('node:path').then(({ default: path }) => {
-          const sessionDir = path.resolve('session');
-          if (fs.existsSync(sessionDir)) {
-            fs.rmSync(sessionDir, { recursive: true, force: true });
-            console.log('[cli] Logged out successfully! Cleared session and browser profile.');
-          } else {
-            console.log('[cli] No active session found.');
-          }
-        });
-      });
-      break;
-    }
-    case 'switch': {
-      const fs = (await import('node:fs')).default;
-      const path = (await import('node:path')).default;
-      const sessionDir = path.resolve('session');
-      if (fs.existsSync(sessionDir)) {
-        fs.rmSync(sessionDir, { recursive: true, force: true });
-        console.log('[cli] Cleared previous session.');
-      }
-      console.log('[cli] Launching browser for new DeepSeek account login...');
-      const session = await login({ headless: false, assumeLoggedOut: true });
-      console.log(`[cli] Successfully switched account! New Token: ${session.token.slice(0, 12)}...`);
-      break;
-    }
+
     default:
-      console.log('Usage:');
-      console.log('  node cli.js login          Log into DeepSeek account via browser');
-      console.log('  node cli.js logout         Clear current session and browser profile');
-      console.log('  node cli.js switch         Switch to another DeepSeek account');
-      console.log('  node cli.js status         Check saved session status');
-      console.log('  node cli.js chat <prompt>  Test direct chat from CLI');
+      console.log('DeepSeek CLI - Unified Account Pool Management:');
+      console.log('');
+      console.log('Commands:');
+      console.log('  node cli.js account:list                 List all accounts and status (or: npm run accounts)');
+      console.log('  node cli.js account:add <name>           Add an account via browser window');
+      console.log('  node cli.js account:add <name> <email> <pwd>  Add an account with auto-filled credentials');
+      console.log('  node cli.js account:refresh [name]       Refresh session token(s) headlessly');
+      console.log('  node cli.js account:test <name> [prompt] Test chat using a specific account');
+      console.log('  node cli.js account:remove <name>        Remove an account from pool');
+      console.log('  node cli.js chat <prompt>                Test chat using next available account');
       break;
   }
 }

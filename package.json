@@ -6,9 +6,11 @@
   "type": "module",
   "scripts": {
     "start": "node app.js",
-    "login": "node cli.js login",
-    "logout": "node cli.js logout",
-    "switch": "node cli.js switch",
+    "accounts": "node cli.js account:list",
+    "account:list": "node cli.js account:list",
+    "account:add": "node cli.js account:add",
+    "account:refresh": "node cli.js account:refresh",
+    "account:remove": "node cli.js account:remove",
     "test": "node --test test/*.test.js"
   },
   "keywords": [

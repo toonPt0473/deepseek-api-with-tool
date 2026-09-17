@@ -67,51 +67,112 @@ npx playwright install chromium
 
 ---
 
-## 🔑 การเข้าสู่ระบบบัญชี DeepSeek (Auth)
+## 💻 คู่มือการใช้งาน CLI (Command-Line Interface)
 
-เนื่องจากหน้าเว็บของ DeepSeek มีระบบ AWS WAF ตรวจจับมนุษย์ เราจึงต้องเข้าสู่ระบบผ่านเบราว์เซอร์จริง 1 ครั้ง เพื่อให้ระบบดึง Bearer Token และ Cookies มาเก็บไว้
+โปรเจกต์นี้มีเครื่องมือ CLI ในตัวผ่านไฟล์ `cli.js` (หรือสั่งผ่าน `npm run`) เพื่อจัดการบัญชี ตรวจสอบสถานะ ต่ออายุ Session และทดสอบการแชต
 
-### วิธีการเข้าสู่ระบบ:
-รันคำสั่ง:
+### 📑 สรุปคำสั่งทั้งหมด (CLI Cheatsheet)
+
+| คำสั่ง (npm run) | คำสั่งเต็ม (node cli.js) | คำอธิบาย |
+| :--- | :--- | :--- |
+| `npm run accounts` | `node cli.js account:list` | แสดงรายการบัญชีทั้งหมดใน Pool และสถานะ (🟢 Active / 🟡 Cooldown) |
+| `npm run account:add` | `node cli.js account:add <name>` | เพิ่มบัญชีเข้า Pool (ล็อกอินผ่านเบราว์เซอร์) |
+| - | `node cli.js account:add <name> <email> <pwd>` | เพิ่มบัญชีเข้า Pool แบบ **Auto-Fill** (กรอกข้อมูลให้ เหลือแค่เลื่อน Captcha) |
+| `npm run account:refresh` | `node cli.js account:refresh [name]` | สั่งต่ออายุ Session เบื้องหลังแบบ **Headless** (ไม่ต้องเปิดหน้าต่าง) |
+| - | `node cli.js account:test <name> [prompt]` | ทดสอบยิงแชตเฉพาะบัญชีที่ระบุ |
+| `npm run account:remove` | `node cli.js account:remove <name>` | ลบบัญชีออกจาก Pool พร้อมลบโปรไฟล์แคช |
+| - | `node cli.js chat "<prompt>"` | ทดสอบยิงข้อความแชตตรงจาก Terminal |
+
+---
+
+### 1. การจัดการบัญชีและ Load Balancer (Account Pool)
+
+ระบบใช้โครงสร้าง **Account Pool** เป็นมาตรฐานเดียวทั้งหมด ไม่ว่าจะใช้งานเพียงบัญชีเดียว หรือหลายบัญชีร่วมกัน โดยข้อมูลแต่ละบัญชีจะถูกจัดเก็บแยกโฟลเดอร์อิสระใน `session/accounts/<name>/`
+
+#### 1.1 การลงทะเบียนบัญชีใหม่เข้าสู่ Pool (`account:add`):
+> [!NOTE]
+> `<name>` (เช่น `main`, `acc1`, `acc2`) คือ **ชื่อเล่น/ฉลาก** ที่ตั้งขึ้นมาเองสำหรับอ้างอิงในระบบ ไม่ใช่ Email ของ DeepSeek
+
+เนื่องจากหน้าเว็บของ DeepSeek มีระบบ AWS WAF ตรวจจับมนุษย์ เราจึงต้องล็อกอินผ่านเบราว์เซอร์จริง 1 ครั้ง เพื่อดึง Bearer Token และ Cookies มาเก็บไว้ โดยเลือกได้ **2 รูปแบบ**:
+
+* **แบบที่ 1 (กรอกผ่านหน้าต่างเบราว์เซอร์ตามปกติ):**
+  ```bash
+  node cli.js account:add main
+  ```
+  1. หน้าต่างเบราว์เซอร์ Chromium จะเด้งขึ้นมาบนหน้าจอ
+  2. ให้คุณทำการเข้าสู่ระบบด้วยบัญชี DeepSeek (Email/Password หรือ Google Login)
+  3. เลื่อนแก้ Captcha / Human Check ให้เรียบร้อย
+  4. เมื่อเข้าสู่หน้าแชตสำเร็จ **หน้าต่างจะปิดลงอัตโนมัติ** และจะบันทึก Session ไว้ที่ `session/accounts/main/`
+
+* **แบบที่ 2 (Auto-Fill ให้สคริปต์พิมพ์ให้อัตโนมัติ ⭐):**
+  ```bash
+  node cli.js account:add main user@example.com mySecretPassword123
+  ```
+  สคริปต์จะเปิดเบราว์เซอร์ พิมพ์ Email กับ Password ให้ทันที **คุณมีหน้าที่เพียงแค่เลื่อนจิ๊กซอว์ Captcha ให้ผ่านเท่านั้น**
+
+#### 1.2 การตรวจสอบรายชื่อและสถานะใน Pool (`account:list`):
 ```bash
-npm run login
-# หรือใช้คำสั่ง: node cli.js login
+npm run accounts
+# หรือ: node cli.js
 ```
-
-1. หน้าต่างเบราว์เซอร์ Chromium จะเด้งขึ้นมาบนหน้าจอ
-2. ให้คุณทำการเข้าสู่ระบบด้วยบัญชี [chat.deepseek.com](https://chat.deepseek.com) (ไม่ว่าจะผ่าน Email/Password หรือ Google Login)
-3. เลื่อนแก้ Captcha / Human Check ให้เรียบร้อย
-4. เมื่อเข้าสู่หน้าแชตสำเร็จ **หน้าต่างเบราว์เซอร์จะปิดลงอัตโนมัติ** และจะบันทึก Session ไว้ที่โฟลเดอร์ `session/session.json`
-
-### วิธีตรวจสอบสถานะการเข้าสู่ระบบ:
-```bash
-node cli.js status
-```
-ตัวอย่างผลลัพธ์:
 ```text
-[cli] Saved session found:
-  - Token: HX7/iQf8XHPp...
-  - Cookies: 25
-  - Age: 5 minutes
-  - Status: Fresh (ready to use)
+[cli] Registered DeepSeek Accounts (2):
+
+  • Account: "main"
+    - Status:   🟢 Active
+    - Token:    eyJhbGciOi...
+    - Age:      5 minutes
+    - Session:  session/accounts/main/session.json
+
+  • Account: "acc2"
+    - Status:   🟢 Active
+    - Token:    eyJzdWIiOi...
+    - Age:      12 minutes
+    - Session:  session/accounts/acc2/session.json
 ```
-> [!TIP]
-> Session จะมีอายุประมาณ 6 ชั่วโมง เมื่อใกล้หมดอายุ ระบบจะทำการ Refresh ผ่านเบราว์เซอร์เบื้องหลัง (Headless) ให้อัตโนมัติโดยที่คุณไม่ต้องล็อกอินซ้ำอีก
 
-### วิธีการสลับบัญชี (Switch Account):
-เมื่อต้องการเปลี่ยนไปใช้บัญชี DeepSeek อื่น สามารถทำได้ง่าย ๆ ด้วยคำสั่ง:
-
+#### 1.3 การรีเฟรชต่ออายุ Session เบื้องหลัง (`account:refresh`):
 ```bash
-npm run switch
-# หรือ: node cli.js switch
-```
-คำสั่งนี้จะล้าง Session และข้อมูลแคชเดิมออกให้ จากนั้นจะเปิดหน้าต่างเบราว์เซอร์ Chromium ขึ้นมาใหม่เพื่อให้คุณล็อกอินบัญชีใหม่ได้ทันที
+# รีเฟรชทุกบัญชีใน pool:
+npm run account:refresh
 
-หรือหากต้องการออกจากระบบเพียงอย่างเดียว:
-```bash
-npm run logout
-# หรือ: node cli.js logout
+# หรือระบุเฉพาะบัญชี:
+node cli.js account:refresh main
 ```
+ระบบจะเปิดเบราว์เซอร์แบบ **ซ่อนหน้าจอ (Headless)** เข้าไปดึง Bearer Token ชุดใหม่มาบันทึกทับไฟล์ให้ทันทีในเวลาไม่กี่วินาที โดยไม่ต้องเปิดหน้าต่างหรือล็อกอินซ้ำ
+
+#### 1.4 การทดสอบและลบบัญชี:
+```bash
+# ทดสอบแชตผ่านบัญชี main:
+node cli.js account:test main "ขอเรื่องตลกสั้นๆ 1 เรื่อง"
+
+# ทดสอบแชตผ่าน Load Balancer:
+node cli.js chat "สวัสดี DeepSeek"
+
+# ลบบัญชีออกจาก pool:
+node cli.js account:remove acc2
+```
+
+---
+
+### 2. หลักการทำงานของ Load Balancer
+
+เมื่อคุณเปิดใช้งานเซิร์ฟเวอร์ด้วย `npm start` ระบบจะโหลดบัญชีทั้งหมดใน Pool มาทำงานร่วมกันอัตโนมัติ:
+
+* **Pure Stateless & Zero-Cache:** ทำงานแบบ Stateless 100% โดยไม่พึ่งพาหรือกักเก็บ `conversation_id` ไว้ ประวัติการสนทนาทั้งหมดจะถูกส่งผ่าน `messages: [...]` และระบบจะสั่งลบ Session ชั่วคราวออกจาก DeepSeek ทันทีหลังตอบกลับเสร็จ ป้องกันปัญหา Session ชนกัน ข้อมูลค้าง หรือห้องแชตรกบน DeepSeek
+* **Round-Robin Scheduling:** คำขอแชตจะหมุนเวียนไปยังบัญชีที่มีอยู่ใน Pool อย่างสม่ำเสมอได้ทุกๆ ข้อความ (เช่น `acc1 -> acc2 -> acc3`)
+* **Auto-Cooldown on 429 Rate Limit:** หากบัญชีใดเจอ `429 Too Many Requests` ระบบจะพักบัญชีนั้น 10 นาที (Cooldown) และสลับคำขอไปยังบัญชีอื่นที่พร้อมใช้งานแทนทันที
+* **Real-time Per-Account Metrics:** สามารถดูสถิติจำนวนครั้งที่แต่ละบัญชีถูกเรียกผ่าน `GET http://127.0.0.1:8000/stats`
+
+---
+
+### 3. กลไกการหมดอายุของ Session & การป้องกันระบบล่ม
+
+Session ของ DeepSeek มีอายุประมาณ **6 ชั่วโมง** ระบบได้วางการป้องกันไว้ 3 ระดับ:
+
+1. **Auto-Refresh ในเบื้องหลัง (อัตโนมัติ 100%):** เมื่อเซสชันใกล้หมดอายุ เซิร์ฟเวอร์จะเรียก `headlessRefresh()` ประจำบัญชีนั้นเพื่อต่ออายุ Token ให้อัตโนมัติโดยที่ผู้ใช้ไม่ต้องทำอะไรเลย
+2. **Auto-Cooldown & Failover เมื่อติด 429:** หากบัญชีใดเกิด Rate Limit ระบบจะตั้ง Cooldown พักบัญชีนั้น 10 นาที และโอนคำขอของผู้ใช้ไปยังบัญชีอื่นใน Pool ให้โดยอัตโนมัติ เซิร์ฟเวอร์จึงไม่ล่ม
+3. **ตรวจสอบสถิติ Real-time:** สามารถดูสถิติจำนวนครั้งที่แต่ละบัญชีถูกยิง และสถานะ Cooldown ได้ทุกเมื่อผ่าน `GET http://127.0.0.1:8000/stats`
 
 ---
 
@@ -354,7 +415,21 @@ RATE_LIMIT_PER_MINUTE=30
 
 # อนุญาตให้เปิดหน้าต่างเบราว์เซอร์อัตโนมัติเมื่อ Session หมดอายุ (1 = เปิด, 0 = ปิด)
 SERVER_INTERACTIVE_LOGIN=1
+
+# เปิดใช้งาน DeepThink (Reasoning) และ Web Search เป็นค่าเริ่มต้นทุกคำขอ (true/false)
+DEFAULT_THINKING=true
+DEFAULT_SEARCH=true
+
+# เปิด/ปิดการแสดง Log รายละเอียดเนื้อหา Prompt & Response (true/false)
+ENABLE_LOGGING=false
+
+# เปิด/ปิดการแสดง Log นับจำนวน Request Counter บรรทัดเดียว (true/false)
+ENABLE_COUNTER_LOG=true
 ```
+
+> [!TIP]
+> - หากต้องการดูเพียงจำนวนครั้งที่มีคนยิงเข้ามาโดยไม่ให้ข้อความ Prompt/Response รกหน้าจอ ให้ตั้ง `ENABLE_LOGGING=false` และ `ENABLE_COUNTER_LOG=true`
+> - สามารถดูสถิติจำนวนครั้งแบบละเอียดได้ทุกเมื่อผ่าน API: `GET http://127.0.0.1:8000/stats`
 
 ---
 
