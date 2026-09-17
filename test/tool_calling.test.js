@@ -73,3 +73,53 @@ test('Tool calling: returns normal conversational text if no tool called', () =>
   assert.equal(result.toolCalls, null);
   assert.equal(result.content, normalText);
 });
+
+test('Tool calling: parses native DeepSeek DSML tool calls (parallel invokes)', () => {
+  const dsmlText = `
+ <｜｜DSML｜｜ calls>
+ <｜｜DSML｜｜ invoke name="read">
+ <｜｜DSML｜｜ parameter name="i" string="true">Reading existing faker sample</｜｜DSML｜｜ parameter>
+ <｜｜DSML｜｜ parameter name="path" string="true">faker-sample.json</｜｜DSML｜｜ parameter>
+ </｜｜DSML｜｜ invoke>
+ <｜｜DSML｜｜ invoke name="read">
+ <｜｜DSML｜｜ parameter name="i" string="true">Reading thaid mock citizens</｜｜DSML｜｜ parameter>
+ <｜｜DSML｜｜ parameter name="path" string="true">thaid-mock/citizens.json</｜｜DSML｜｜ parameter>
+ </｜｜DSML｜｜ invoke>
+ </｜｜DSML｜｜ calls>
+  `;
+
+  const result = parseAssistantResponse(dsmlText);
+  assert.equal(result.isToolCall, true);
+  assert.equal(result.content, null);
+  assert.ok(Array.isArray(result.toolCalls));
+  assert.equal(result.toolCalls.length, 2);
+
+  assert.equal(result.toolCalls[0].function.name, 'read');
+  const args0 = JSON.parse(result.toolCalls[0].function.arguments);
+  assert.equal(args0.path, 'faker-sample.json');
+  assert.equal(args0.i, 'Reading existing faker sample');
+
+  assert.equal(result.toolCalls[1].function.name, 'read');
+  const args1 = JSON.parse(result.toolCalls[1].function.arguments);
+  assert.equal(args1.path, 'thaid-mock/citizens.json');
+  assert.equal(args1.i, 'Reading thaid mock citizens');
+});
+
+test('Tool calling: parses DSML tool calls with conversational prefix', () => {
+  const dsmlText = `
+I will read the files now to check the structure.
+<｜｜DSML｜｜ calls>
+<｜｜DSML｜｜ invoke name="read">
+<｜｜DSML｜｜ parameter name="path" string="true">config.json</｜｜DSML｜｜ parameter>
+</｜｜DSML｜｜ invoke>
+</｜｜DSML｜｜ calls>
+  `;
+
+  const result = parseAssistantResponse(dsmlText);
+  assert.equal(result.isToolCall, true);
+  assert.equal(result.content, 'I will read the files now to check the structure.');
+  assert.equal(result.toolCalls.length, 1);
+  assert.equal(result.toolCalls[0].function.name, 'read');
+  assert.equal(JSON.parse(result.toolCalls[0].function.arguments).path, 'config.json');
+});
+

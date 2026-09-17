@@ -5,12 +5,27 @@ import crypto from 'node:crypto';
  * Translates OpenAI tools schema into system instructions and parses assistant tool calls.
  */
 
-export function hasTools(tools) {
-  return Array.isArray(tools) && tools.length > 0;
+export function hasTools(tools, messages = []) {
+  if (Array.isArray(tools) && tools.length > 0) {
+    return true;
+  }
+  if (Array.isArray(messages)) {
+    for (const m of messages) {
+      const text = typeof m?.content === 'string' ? m.content : JSON.stringify(m?.content || '');
+      if (
+        text.includes('[AVAILABLE TOOLS]') ||
+        text.includes('DSML') ||
+        text.includes('tool_calls')
+      ) {
+        return true;
+      }
+    }
+  }
+  return false;
 }
 
 /**
- * Generate instruction prompt describing the tools and JSON calling format.
+ * Generate instruction prompt describing the tools and JSON / DSML calling formats.
  *
  * @param {Array<object>} tools
  * @returns {string}
@@ -36,8 +51,8 @@ export function buildToolInstructionPrompt(tools) {
     `You have access to the following functions/tools:\n\n` +
     `${toolDescriptions}\n\n` +
     `[TOOL USAGE INSTRUCTIONS]\n` +
-    `If you need to invoke one or more tools to answer the user's request, you MUST respond ONLY with a JSON object enclosed in a \`\`\`json\`\`\` code fence.\n` +
-    `Format:\n` +
+    `If you need to invoke one or more tools to answer the user's request, respond with a JSON object enclosed in a \`\`\`json\`\`\` code fence or with native DSML tags.\n` +
+    `Format (JSON):\n` +
     `\`\`\`json\n` +
     `{\n` +
     `  "tool_calls": [\n` +
@@ -48,10 +63,16 @@ export function buildToolInstructionPrompt(tools) {
     `  ]\n` +
     `}\n` +
     `\`\`\`\n` +
+    `Or Format (DSML):\n` +
+    `<｜｜DSML｜｜ calls>\n` +
+    `<｜｜DSML｜｜ invoke name="function_name">\n` +
+    `<｜｜DSML｜｜ parameter name="param_name" string="true">value</｜｜DSML｜｜ parameter>\n` +
+    `</｜｜DSML｜｜ invoke>\n` +
+    `</｜｜DSML｜｜ calls>\n\n` +
     `Rules:\n` +
-    `- Output ONLY the JSON code block when calling tools. No greeting, no explanation, no other text.\n` +
-    `- "arguments" must be a valid JSON object matching the function's parameters schema.\n` +
-    `- If NO tool call is needed, reply normally with natural conversational text and DO NOT use the tool_calls JSON format.`
+    `- Output the tool call block when calling tools.\n` +
+    `- "arguments" or parameters must match the function's parameters schema.\n` +
+    `- If NO tool call is needed, reply normally with natural conversational text and DO NOT use tool calling syntax.`
   );
 }
 
@@ -128,7 +149,84 @@ export function prepareMessagesForTools(messages, tools) {
 }
 
 /**
- * Inspect raw LLM response text to see if it emitted a tool call JSON.
+ * Parse native DeepSeek DSML tags or XML invoke blocks into OpenAI tool calls.
+ *
+ * Examples:
+ * <｜｜DSML｜｜ calls>
+ * <｜｜DSML｜｜ invoke name="read">
+ * <｜｜DSML｜｜ parameter name="path" string="true">file.txt</｜｜DSML｜｜ parameter>
+ * </｜｜DSML｜｜ invoke>
+ * </｜｜DSML｜｜ calls>
+ *
+ * @param {string} rawText
+ * @returns {{ isToolCall: boolean, toolCalls: Array<object>, content: string|null }|null}
+ */
+export function parseDsmlToolCalls(rawText) {
+  if (!rawText || typeof rawText !== 'string') return null;
+
+  // Check if text has any invoke tags (with or without DSML prefix or pipe variations)
+  if (!/<[｜|\s]*(?:DSML[｜|\s]*)?invoke\s+name=/i.test(rawText)) {
+    return null;
+  }
+
+  const invokeRegex = /<[｜|\s]*(?:DSML[｜|\s]*)?invoke\s+name=["']([^"']+)["'][^>]*>([\s\S]*?)<\/[｜|\s]*(?:DSML[｜|\s]*)?invoke>/gi;
+  const paramRegex = /<[｜|\s]*(?:DSML[｜|\s]*)?parameter\s+name=["']([^"']+)["']([^>]*)>([\s\S]*?)<\/[｜|\s]*(?:DSML[｜|\s]*)?parameter>/gi;
+
+  const toolCalls = [];
+  let invokeMatch;
+
+  while ((invokeMatch = invokeRegex.exec(rawText)) !== null) {
+    const fnName = invokeMatch[1];
+    const invokeBody = invokeMatch[2];
+    const args = {};
+
+    let paramMatch;
+    while ((paramMatch = paramRegex.exec(invokeBody)) !== null) {
+      const paramName = paramMatch[1];
+      const attrs = paramMatch[2] || '';
+      const rawVal = paramMatch[3].trim();
+
+      const isString = /string=["']true["']/i.test(attrs);
+      if (isString) {
+        args[paramName] = rawVal;
+      } else {
+        try {
+          args[paramName] = JSON.parse(rawVal);
+        } catch {
+          args[paramName] = rawVal;
+        }
+      }
+    }
+
+    toolCalls.push({
+      id: `call_${crypto.randomBytes(6).toString('hex')}`,
+      type: 'function',
+      function: {
+        name: fnName,
+        arguments: JSON.stringify(args),
+      },
+    });
+  }
+
+  if (toolCalls.length === 0) {
+    return null;
+  }
+
+  // Strip DSML blocks to get any leading or trailing conversational text
+  let cleanContent = rawText;
+  cleanContent = cleanContent.replace(/<[｜|\s]*DSML[｜|\s]*(?:calls|tool_calls)[^>]*>[\s\S]*?<\/[｜|\s]*DSML[｜|\s]*(?:calls|tool_calls)>/gi, '');
+  cleanContent = cleanContent.replace(/<[｜|\s]*(?:DSML[｜|\s]*)?invoke\s+name=["'][^"']+["'][^>]*>[\s\S]*?<\/[｜|\s]*(?:DSML[｜|\s]*)?invoke>/gi, '');
+  cleanContent = cleanContent.trim();
+
+  return {
+    isToolCall: true,
+    toolCalls,
+    content: cleanContent || null,
+  };
+}
+
+/**
+ * Inspect raw LLM response text to see if it emitted a tool call (JSON or DSML).
  *
  * @param {string} rawText
  * @returns {{ isToolCall: boolean, toolCalls: Array<object>|null, content: string|null }}
@@ -138,18 +236,24 @@ export function parseAssistantResponse(rawText) {
     return { isToolCall: false, toolCalls: null, content: '' };
   }
 
+  // Pattern 1: DeepSeek native DSML tool calls
+  const dsmlResult = parseDsmlToolCalls(rawText);
+  if (dsmlResult) {
+    return dsmlResult;
+  }
+
   const trimmed = rawText.trim();
 
-  // Pattern 1: fenced code block ```json ... ```
+  // Pattern 2: fenced code block ```json ... ```
   const fenceMatch = trimmed.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
   let jsonString = fenceMatch ? fenceMatch[1].trim() : null;
 
-  // Pattern 2: direct JSON object
+  // Pattern 3: direct JSON object
   if (!jsonString && trimmed.startsWith('{') && trimmed.endsWith('}')) {
     jsonString = trimmed;
   }
 
-  // Pattern 3: substring containing {"tool_calls": ...}
+  // Pattern 4: substring containing {"tool_calls": ...}
   if (!jsonString) {
     const startIdx = trimmed.indexOf('{"tool_calls"');
     if (startIdx !== -1) {

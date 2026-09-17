@@ -228,8 +228,8 @@ export function createServer({ client = null, accountPool = null, rateLimit = RA
 
     // Streaming mode
     if (stream) {
-      // If tools are specified, we buffer output to check if the model responded with a tool call
-      if (hasTools(tools)) {
+      // If tools are specified or triggered, buffer output to check if model responded with a tool call
+      if (hasTools(tools, messages)) {
         try {
           const reply = await dsClient.chat(prompt, {
             model: modelType,
@@ -261,7 +261,7 @@ export function createServer({ client = null, accountPool = null, rateLimit = RA
             logDetails(`  • Request Count: Chat #${chatIndex} | Total: ${stats.totalRequests}`);
             logDetails(`======================================================================`);
 
-            // Emit role frame
+            // Emit role frame with indexed tool calls
             res.write(`data: ${JSON.stringify({
               id: cid,
               object: 'chat.completion.chunk',
@@ -269,7 +269,19 @@ export function createServer({ client = null, accountPool = null, rateLimit = RA
               model,
               choices: [{
                 index: 0,
-                delta: { role: 'assistant', content: null, tool_calls: parsed.toolCalls },
+                delta: {
+                  role: 'assistant',
+                  content: parsed.content || null,
+                  tool_calls: parsed.toolCalls.map((tc, idx) => ({
+                    index: idx,
+                    id: tc.id,
+                    type: 'function',
+                    function: {
+                      name: tc.function.name,
+                      arguments: tc.function.arguments,
+                    },
+                  })),
+                },
                 finish_reason: null,
               }],
             })}\n\n`);
@@ -409,11 +421,11 @@ export function createServer({ client = null, accountPool = null, rateLimit = RA
       let toolCalls = null;
       let content = reply.text;
 
-      if (hasTools(tools)) {
+      if (hasTools(tools, messages)) {
         const parsed = parseAssistantResponse(reply.text);
         if (parsed.isToolCall) {
           toolCalls = parsed.toolCalls;
-          content = null;
+          content = parsed.content;
         } else {
           content = parsed.content;
         }
